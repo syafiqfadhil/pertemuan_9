@@ -67,5 +67,94 @@ class NotificationService {
         >()
         ?.createNotificationChannel(_channel);
 
-}
+    // 3. Ambil FCM Token (alamat tujuan notifikasi untuk device ini)
+    try {
+      // ignore: deprecated_member_use
+      final token = await _messaging.getToken();
+      debugPrint('[FCM] TOKEN: $token');
+    } catch (e) {
+      debugPrint('[FCM] Gagal mengambil token: $e');
+    }
+    // ignore: deprecated_member_use
+    _messaging.onTokenRefresh.listen((newToken) {
+      debugPrint('[FCM] TOKEN BARU: $newToken');
+    });
+
+    // 4. Subscribe ke topic "kelas" (untuk kirim ke banyak device sekaligus)
+    await _messaging.subscribeToTopic('kelas');
+
+    // 5. FOREGROUND: pesan masuk saat aplikasi sedang dibuka
+    FirebaseMessaging.onMessage.listen(_showForegroundNotification);
+
+    // 6. BACKGROUND -> klik notifikasi -> aplikasi kembali terbuka
+    FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
+      debugPrint('[FCM] Dibuka dari BACKGROUND');
+      _openDetail(_messageToMap(message));
+    });
+
+    // 7. TERMINATED -> klik notifikasi -> aplikasi dijalankan dari awal
+    final initialMessage = await _messaging.getInitialMessage();
+    if (initialMessage != null) {
+      debugPrint('[FCM] Dibuka dari kondisi MATI (terminated)');
+      _openDetail(_messageToMap(initialMessage));
+    }
+
+    // 8. (Tambahan) Aplikasi dibuka dari notifikasi LOKAL saat app sudah mati
+    final launchDetails = await _localNotif.getNotificationAppLaunchDetails();
+    final payload = launchDetails?.notificationResponse?.payload;
+    if ((launchDetails?.didNotificationLaunchApp ?? false) && payload != null) {
+      _openDetail(jsonDecode(payload) as Map<String, dynamic>);
+    }
+  }
+
+  /// Menampilkan notifikasi saat aplikasi di FOREGROUND.
+  /// Android TIDAK menampilkan notifikasi FCM secara otomatis
+  /// jika aplikasi sedang dibuka, jadi kita tampilkan sendiri.
+  static Future<void> _showForegroundNotification(RemoteMessage message) async {
+    debugPrint('[FCM] Pesan FOREGROUND: ${message.notification?.title}');
+    final notification = message.notification;
+    if (notification == null) return;
+
+    await _localNotif.show(
+      id: notification.hashCode,
+      title: notification.title,
+      body: notification.body,
+      notificationDetails: NotificationDetails(
+        android: AndroidNotificationDetails(
+          _channel.id,
+          _channel.name,
+          channelDescription: _channel.description,
+          importance: Importance.max,
+          priority: Priority.high,
+          icon: '@mipmap/ic_launcher',
+        ),
+      ),
+      payload: jsonEncode(_messageToMap(message)),
+    );
+  }
+
+  /// Gabungkan title, body, dan data menjadi satu Map.
+  static Map<String, dynamic> _messageToMap(RemoteMessage message) {
+    return {
+      'title': message.notification?.title ?? '-',
+      'body': message.notification?.body ?? '-',
+      ...message.data,
+    };
+  }
+
+  /// Buka halaman detail notifikasi.
+  static void _openDetail(Map<String, dynamic> data) {
+    void push() {
+      navigatorKey.currentState?.push(
+        MaterialPageRoute(builder: (_) => NotificationDetailScreen(data: data)),
+      );
+    }
+
+    // Jika Navigator belum siap (aplikasi baru start), tunggu frame pertama.
+    if (navigatorKey.currentState != null) {
+      push();
+    } else {
+      WidgetsBinding.instance.addPostFrameCallback((_) => push());
+    }
+  }
 }
